@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Luminis</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #0b0f0d;
+    --panel: #121a15;
+    --accent: #39ff8f;
+    --accent-dim: #1f8a52;
+    --text: #e6fff0;
+    --text-dim: #7ba98c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: #e6fff0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 16px 40px;
+  }
+  h1 {
+    color: var(--accent);
+    font-size: 22px;
+    letter-spacing: 2px;
+    text-shadow: 0 0 12px rgba(57,255,143,0.5);
+    margin: 8px 0 4px;
+  }
+  .balance {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  .balance b { color: var(--accent); font-size: 16px; }
+
+  .pot {
+    width: 220px;
+    height: 220px;
+    border-radius: 24px;
+    background: radial-gradient(circle at 50% 30%, #163a24, var(--panel));
+    border: 1px solid rgba(57,255,143,0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 80px;
+    margin-bottom: 20px;
+    box-shadow: 0 0 30px rgba(57,255,143,0.08) inset;
+    transition: transform 0.2s ease;
+  }
+  .pot.ready {
+    box-shadow: 0 0 40px rgba(57,255,143,0.35) inset, 0 0 20px rgba(57,255,143,0.3);
+    animation: pulse 1.4s infinite ease-in-out;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.03); }
+  }
+
+  .timer {
+    font-size: 15px;
+    color: var(--text-dim);
+    margin-bottom: 18px;
+    min-height: 20px;
+  }
+
+  button {
+    width: 100%;
+    max-width: 280px;
+    padding: 14px;
+    border-radius: 14px;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    background: var(--accent);
+    color: #06170d;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+  button:disabled {
+    background: var(--panel);
+    color: var(--text-dim);
+    border: 1px solid rgba(57,255,143,0.2);
+  }
+  button:active:not(:disabled) { opacity: 0.8; }
+
+  .status {
+    margin-top: 18px;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+    min-height: 18px;
+  }
+
+  .footer-note {
+    margin-top: 40px;
+    font-size: 11px;
+    color: #3d5a48;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <h1>🌿 LUMINIS</h1>
+  <div class="balance">Споры: <b id="balance">—</b></div>
+
+  <div class="pot" id="pot">🪴</div>
+  <div class="timer" id="timer"></div>
+
+  <button id="actionBtn" disabled>Загрузка...</button>
+  <div class="status" id="status"></div>
+
+  <div class="footer-note">MVP v0.1 — Luminis Grow</div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  // На случай локального теста вне Telegram initData будет пустой строкой —
+  // тогда backend вернёт 401, это ожидаемо (проверка initData обязательна).
+  const initData = tg?.initData || "";
+
+  const potEl = document.getElementById("pot");
+  const timerEl = document.getElementById("timer");
+  const balanceEl = document.getElementById("balance");
+  const btnEl = document.getElementById("actionBtn");
+  const statusEl = document.getElementById("status");
+
+  let pollTimer = null;
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function formatSeconds(s) {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${String(sec).padStart(2, "0")}`;
+  }
+
+  function render(state) {
+    balanceEl.textContent = state.currency;
+    potEl.classList.remove("ready");
+
+    if (state.plot_state === "empty") {
+      potEl.textContent = "🪴";
+      timerEl.textContent = "Горшок пуст";
+      btnEl.textContent = "🌱 Посадить";
+      btnEl.disabled = false;
+      btnEl.onclick = plant;
+    } else if (state.plot_state === "growing") {
+      potEl.textContent = "🌱";
+      timerEl.textContent = "Растёт: " + formatSeconds(state.seconds_remaining);
+      btnEl.textContent = "Ещё растёт...";
+      btnEl.disabled = true;
+      btnEl.onclick = null;
+    } else if (state.plot_state === "ready") {
+      potEl.textContent = "✨🌿";
+      potEl.classList.add("ready");
+      timerEl.textContent = "Готово к сбору!";
+      btnEl.textContent = "🌿 Собрать урожай";
+      btnEl.disabled = false;
+      btnEl.onclick = harvest;
+    }
+  }
+
+  async function callApi(path, options = {}) {
+    const res = await fetch(path, options);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Ошибка сервера");
+    }
+    return res.json();
+  }
+
+  async function fetchState() {
+    try {
+      const state = await callApi(`/api/state?init_data=${encodeURIComponent(initData)}`);
+      render(state);
+      setStatus("");
+    } catch (e) {
+      setStatus(e.message);
+    }
+  }
+
+  async function plant() {
+    btnEl.disabled = true;
+    try {
+      const state = await callApi("/api/plant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ init_data: initData }),
+      });
+      render(state);
+    } catch (e) {
+      setStatus(e.message);
+      btnEl.disabled = false;
+    }
+  }
+
+  async function harvest() {
+    btnEl.disabled = true;
+    try {
+      const state = await callApi("/api/harvest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ init_data: initData }),
+      });
+      render(state);
+      tg?.HapticFeedback?.notificationOccurred("success");
+    } catch (e) {
+      setStatus(e.message);
+      btnEl.disabled = false;
+    }
+  }
+
+  fetchState();
+  // Обновляем состояние каждые 3 секунды, чтобы таймер тикал и без перезагрузки
+  pollTimer = setInterval(fetchState, 3000);
+</script>
+</body>
+</html>
